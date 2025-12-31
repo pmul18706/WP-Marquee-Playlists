@@ -1,481 +1,534 @@
 <?php
 /**
- * Plugin Name: WP Marquee Playlists
- * Description: Create scheduled image playlists and display them as a marquee scroll or static gallery via public link or shortcode. Ideal for use to playback graphics on billboards.
- * @wordpress-plugin
- * @package wp-marquee-playlists
- * @author pmul18706 <pmul18706@gmail.com>
- * License: GPL v2 or later
- * License URI: https://www.gnu.org/licenses/gpl-2.0.html
- * Version: 1.0.0
- * Author: Patrick Mullin Jr
- * Author URI: https://https://github.com/pmul18706/WP-Marquee-Playlists
+ * Plugin Name:       WP Marquee Playlists
+ * Description:       Create scheduled image playlists and display them as a marquee scroll or static gallery via public link or shortcode. Ideal for graphics playback (e.g., billboards).
+ * Version:           1.0.8
+ * Requires at least: 6.0
+ * Requires PHP:      7.4
+ * Author:            Patrick Mullin Jr
+ * Author URI:        https://github.com/pmul18706/WP-Marquee-Playlists
+ * License:           GPL-2.0-or-later
+ * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
+ * Text Domain:       wp-marquee-playlists
  */
+
+
 
 if (!defined('ABSPATH')) exit;
 
-class WP_Marquee_Playlists {
-  const CPT = 'wpmq_playlist';
-  const QV  = 'wpmq_token';
+class WMP_Marquee_Playlists {
+  const OPT_KEY = 'wmp_playlists_v108';
 
   public function __construct() {
-    add_action('init', [$this, 'register_cpt']);
-    add_action('init', [$this, 'add_rewrite']);
-    add_filter('query_vars', [$this, 'query_vars']);
-
-    add_action('add_meta_boxes', [$this, 'add_meta_boxes']);
-    add_action('save_post', [$this, 'save_post'], 10, 2);
-
+    add_action('admin_menu', [$this, 'admin_menu']);
     add_action('admin_enqueue_scripts', [$this, 'admin_assets']);
+    add_action('wp_enqueue_scripts', [$this, 'frontend_assets']);
 
-    add_shortcode('wp_marquee', [$this, 'shortcode']);
+    add_action('wp_ajax_wmp_save_playlist', [$this, 'ajax_save_playlist']);
+    add_action('wp_ajax_wmp_delete_playlist', [$this, 'ajax_delete_playlist']);
 
-    add_action('template_redirect', [$this, 'maybe_render_public']);
-  }
-  
-  private function asset_url($file){
-  return plugin_dir_url(__FILE__) . 'assets/' . ltrim($file,'/');
-}
+    add_shortcode('wmp_playlist', [$this, 'shortcode_playlist']);
 
-
-  public static function activate() {
-    $self = new self();
-    $self->register_cpt();
-    $self->add_rewrite();
-    flush_rewrite_rules();
+    add_action('init', [$this, 'add_rewrite']);
+    add_filter('query_vars', function($vars){ $vars[]='wmp_token'; return $vars; });
+    add_action('template_redirect', [$this, 'token_route']);
   }
 
-  public static function deactivate() {
-    flush_rewrite_rules();
+  private function get_data() {
+    $data = get_option(self::OPT_KEY, null);
+    if ($data === null) $data = get_option('wmp_playlists_v107', null);
+    if ($data === null) $data = get_option('wmp_playlists_v106', null);
+    if ($data === null) $data = get_option('wmp_playlists_v105', null);
+    if ($data === null) $data = get_option('wmp_playlists_v104', null);
+    if ($data === null) $data = get_option('wmp_playlists_v103', ['playlists'=>[]]);
+    if (!is_array($data) || !isset($data['playlists'])) $data = ['playlists'=>[]];
+    return $data;
   }
 
-  public function register_cpt() {
-    register_post_type(self::CPT, [
-      'labels' => [
-        'name' => 'Marquee Playlists',
-        'singular_name' => 'Marquee Playlist',
-        'add_new_item' => 'Add New Playlist',
-        'edit_item' => 'Edit Playlist',
-      ],
-      'public' => false,
-      'show_ui' => true,
-      'menu_icon' => 'dashicons-images-alt2',
-      'supports' => ['title'],
+  private function save_data($data) {
+    update_option(self::OPT_KEY, $data, false);
+  }
+
+  private function new_token() {
+    return substr(str_replace(['=','/','+'], '', base64_encode(random_bytes(9))), 0, 12);
+  }
+
+  public function admin_menu() {
+    add_menu_page(
+      'Marquee Playlists',
+      'Marquee Playlists',
+      'manage_options',
+      'wmp_playlists_items',
+      [$this, 'admin_items_page'],
+      'dashicons-images-alt2'
+    );
+
+    add_submenu_page(
+      'wmp_playlists_items',
+      'Playlist Items',
+      'Items',
+      'manage_options',
+      'wmp_playlists_items',
+      [$this, 'admin_items_page']
+    );
+
+    add_submenu_page(
+      'wmp_playlists_items',
+      'Playlist Options',
+      'Options',
+      'manage_options',
+      'wmp_playlists_options',
+      [$this, 'admin_options_page']
+    );
+  }
+
+  public function admin_assets($hook) {
+    // Only load on our pages
+    $is_items = ($hook === 'toplevel_page_wmp_playlists_items' || $hook === 'marquee-playlists_page_wmp_playlists_items');
+    $is_opts  = ($hook === 'marquee-playlists_page_wmp_playlists_options');
+
+    if (!$is_items && !$is_opts) return;
+
+    wp_enqueue_media();
+    wp_enqueue_style('wmp-admin', plugin_dir_url(__FILE__) . 'assets/admin.css', [], '1.0.8');
+
+    wp_enqueue_script('jquery-ui-sortable');
+    wp_enqueue_script('wmp-admin', plugin_dir_url(__FILE__) . 'assets/admin.js', ['jquery','jquery-ui-sortable'], '1.0.8', true);
+
+    $playlist_id = isset($_GET['playlist_id']) ? sanitize_text_field($_GET['playlist_id']) : '';
+
+    wp_localize_script('wmp-admin', 'WMP', [
+      'ajax_url' => admin_url('admin-ajax.php'),
+      'nonce' => wp_create_nonce('wmp_nonce'),
+      'site_url' => site_url('/'),
+      'page' => $is_opts ? 'options' : 'items',
+      'playlist_id' => $playlist_id,
     ]);
+  }
+
+  public function frontend_assets() {
+    wp_enqueue_style('wmp-front', plugin_dir_url(__FILE__) . 'assets/front.css', [], '1.0.8');
+    wp_enqueue_script('wmp-front', plugin_dir_url(__FILE__) . 'assets/front.js', [], '1.0.8', true);
   }
 
   public function add_rewrite() {
-    // Public link pattern: /simp/{token}/
-    add_rewrite_rule('^simp/([^/]+)/?$', 'index.php?' . self::QV . '=$matches[1]', 'top');
+    add_rewrite_rule('^simp/([^/]+)/?$', 'index.php?wmp_token=$matches[1]', 'top');
   }
 
-  public function query_vars($vars) {
-    $vars[] = self::QV;
-    return $vars;
-  }
-
-  public function add_meta_boxes() {
-    add_meta_box('wpmq_items', 'Playlist Items (Images + Scheduling)', [$this, 'mb_items'], self::CPT, 'normal', 'high');
-    add_meta_box('wpmq_settings', 'Playlist Settings', [$this, 'mb_settings'], self::CPT, 'side', 'high');
-    add_meta_box('wpmq_public', 'Public Link', [$this, 'mb_public'], self::CPT, 'side', 'default');
-  }
-
-public function admin_assets($hook) {
-  $screen = function_exists('get_current_screen') ? get_current_screen() : null;
-  if (!$screen || $screen->post_type !== self::CPT) return;
-
-  wp_enqueue_media();
-  wp_enqueue_script('jquery');
-
-  $base = plugin_dir_url(__FILE__) . 'assets/';
-
-  wp_enqueue_style('wpmq-admin', $base . 'admin.css', array(), '1.0.2');
-  wp_enqueue_script('wpmq-admin', $base . 'admin.js', array('jquery'), '1.0.2', true);
-}
-
-
-  private function get_items($post_id) {
-    $items = get_post_meta($post_id, '_wpmq_items', true);
-    if (!is_array($items)) $items = [];
-    return $items;
-  }
-
-  private function get_settings($post_id) {
-    $defaults = [
-      'mode' => 'marquee',          // marquee | static
-      'direction' => 'left',        // left | right
-      'speed' => 80,                // px per second
-      'pause_on_hover' => 1,        // 1|0
-      'pause_time' => 0,            // ms (optional extra pause between loops)
-      'window_height' => 160,       // px
-      'gap' => 24,                  // px gap between images
-      'bg' => '#000000',            // background
-    ];
-    $s = get_post_meta($post_id, '_wpmq_settings', true);
-    if (!is_array($s)) $s = [];
-    return array_merge($defaults, $s);
-  }
-
-  public function mb_items($post) {
-      
-    wp_nonce_field('wpmq_save', 'wpmq_nonce');
-    $items = $this->get_items($post->ID);
-
-    echo '<div class="wpmq-small">Add images to this playlist. Each image can have a schedule window (start/end). If end is blank, it runs indefinitely after start.</div>';
-    echo '<div id="wpmq-items">';
-
-    if (empty($items)) {
-      // start empty; user will click add
-    } else {
-      foreach ($items as $i => $it) {
-        $this->render_item_row($i, $it);
-      }
-    }
-
-    echo '</div>';
-
-    echo '<button type="button" class="button button-primary" id="wpmq-add-item">+ Add Image</button>';
-
-
-    // Hidden template
-    echo '<script type="text/html" id="wpmq-item-template">';
-    $this->render_item_row('__INDEX__', [
-      'image_id' => '',
-      'start' => '',
-      'end' => '',
-      'alt' => '',
-      'link' => '',
-    ], true);
-    echo '</script>';
-  }
-
-  private function render_item_row($index, $it, $is_template = false) {
-    $image_id = isset($it['image_id']) ? intval($it['image_id']) : 0;
-    $active = isset($it['active']) ? (int)$it['active'] : 1;
-    $start    = isset($it['start']) ? esc_attr($it['start']) : '';
-    $end      = isset($it['end']) ? esc_attr($it['end']) : '';
-    $alt      = isset($it['alt']) ? esc_attr($it['alt']) : '';
-    $link     = isset($it['link']) ? esc_url($it['link']) : '';
-
-    $thumb = $image_id ? wp_get_attachment_image_url($image_id, 'medium') : '';
-    $title = $image_id ? get_the_title($image_id) : '';
-    $inactive_class = ($active ? '' : ' is-inactive');
-echo '<div class="wpmq-item'.$inactive_class.'" data-index="'.esc_attr($index).'">';
-
-    echo '<div class="wpmq-item" data-index="'.esc_attr($index).'">';
-    echo '<div class="wpmq-item-row">';
-
-    echo '<div>';
-    echo '<img class="wpmq-thumb" src="'.esc_url($thumb ?: '').'" alt="" />';
-    echo '<div class="wpmq-small wpmq-image-title">'.esc_html($title ?: '').'</div>';
-    echo '<input class="wpmq-image-id" type="hidden" data-name="wpmq_items[__INDEX__][image_id]" value="'.esc_attr($image_id ?: '').'"/>';
-    echo '<div class="wpmq-actions">';
-    echo '<button class="button wpmq-btn wpmq-pick">Choose Image</button>';
-    echo '<button class="button wpmq-btn wpmq-remove wpmq-danger">Remove</button>';
-    echo '</div>';
-    echo '</div>';
-    
-    echo '<p style="margin:8px 0 0 0;">
-  <label>
-    <input type="checkbox" class="wpmq-active"
-      data-name="wpmq_items[__INDEX__][active]"
-      value="1" '.checked($active, 1, false).' />
-    <strong>Active</strong>
-  </label>
-</p>';
-
-
-    echo '<div>';
-    echo '<label><strong>Start (default = now)</strong><br/>';
-    echo '<input class="wpmq-start" type="datetime-local" data-name="wpmq_items[__INDEX__][start]" value="'.esc_attr($start).'"/></label>';
-    echo '<p class="wpmq-small">If blank: starts immediately.</p>';
-    echo '</div>';
-
-    echo '<div>';
-    echo '<label><strong>End</strong><br/>';
-    echo '<input type="datetime-local" data-name="wpmq_items[__INDEX__][end]" value="'.esc_attr($end).'"/></label>';
-    echo '<p class="wpmq-small">If blank: no end.</p>';
-    echo '</div>';
-
-    echo '<div>';
-    echo '<label><strong>Alt Text (optional)</strong><br/>';
-    echo '<input type="text" style="width:100%" data-name="wpmq_items[__INDEX__][alt]" value="'.esc_attr($alt).'"/></label>';
-    echo '<p class="wpmq-small">Used for accessibility.</p>';
-    echo '</div>';
-
-    echo '<div>';
-    echo '<label><strong>Click Link (optional)</strong><br/>';
-    echo '<input type="url" style="width:100%" data-name="wpmq_items[__INDEX__][link]" value="'.esc_attr($link).'"/></label>';
-    echo '<p class="wpmq-small">If set, image becomes a link.</p>';
-    echo '</div>';
-
-    echo '</div>'; // row
-    echo '</div>'; // item
-  }
-
-  public function mb_settings($post) {
-    $s = $this->get_settings($post->ID);
-
-    echo '<p><label><strong>Mode</strong><br/>';
-    echo '<select name="wpmq_settings[mode]">';
-    echo '<option value="marquee" '.selected($s['mode'],'marquee',false).'>Marquee (scroll)</option>';
-    echo '<option value="static" '.selected($s['mode'],'static',false).'>Static (no scroll)</option>';
-    echo '</select></label></p>';
-
-    echo '<p><label><strong>Direction</strong><br/>';
-    echo '<select name="wpmq_settings[direction]">';
-    echo '<option value="left" '.selected($s['direction'],'left',false).'>Left</option>';
-    echo '<option value="right" '.selected($s['direction'],'right',false).'>Right</option>';
-    echo '</select></label></p>';
-
-    echo '<p><label><strong>Speed (px/sec)</strong><br/>';
-    echo '<input type="number" min="10" max="1000" name="wpmq_settings[speed]" value="'.esc_attr(intval($s['speed'])).'" style="width:100%"/></label></p>';
-
-    echo '<p><label><strong>Pause on hover</strong><br/>';
-    echo '<select name="wpmq_settings[pause_on_hover]">';
-    echo '<option value="1" '.selected($s['pause_on_hover'],1,false).'>Yes</option>';
-    echo '<option value="0" '.selected($s['pause_on_hover'],0,false).'>No</option>';
-    echo '</select></label></p>';
-
-    echo '<p><label><strong>Pause time between loops (ms)</strong><br/>';
-    echo '<input type="number" min="0" max="600000" name="wpmq_settings[pause_time]" value="'.esc_attr(intval($s['pause_time'])).'" style="width:100%"/></label></p>';
-
-    echo '<p><label><strong>Window height (px)</strong><br/>';
-    echo '<input type="number" min="40" max="2000" name="wpmq_settings[window_height]" value="'.esc_attr(intval($s['window_height'])).'" style="width:100%"/></label></p>';
-
-    echo '<p><label><strong>Gap between images (px)</strong><br/>';
-    echo '<input type="number" min="0" max="400" name="wpmq_settings[gap]" value="'.esc_attr(intval($s['gap'])).'" style="width:100%"/></label></p>';
-
-    echo '<p><label><strong>Background color</strong><br/>';
-    echo '<input type="text" name="wpmq_settings[bg]" value="'.esc_attr($s['bg']).'" style="width:100%" placeholder="#000000"/></label></p>';
-
-    echo '<p class="wpmq-small">Tip: Speed is pixels per second. Higher = faster.</p>';
-  }
-
-  public function mb_public($post) {
-    $token = get_post_meta($post->ID, '_wpmq_token', true);
-    if (!$token) {
-      $token = $this->generate_token();
-      update_post_meta($post->ID, '_wpmq_token', $token);
-    }
-
-    $url = home_url('/simp/' . rawurlencode($token) . '/');
-
-    echo '<p><strong>Public link</strong></p>';
-    echo '<p><input type="text" readonly style="width:100%" value="'.esc_attr($url).'" onclick="this.select();"/></p>';
-    echo '<p class="wpmq-small">Anyone with this link can view the playlist. If your link 404s after activation, go to <em>Settings → Permalinks</em> and click Save.</p>';
-    echo '<hr/>';
-    echo '<p><strong>Shortcode</strong></p>';
-    echo '<p><code>[wp_marquee playlist="'.intval($post->ID).'"]</code></p>';
-  }
-
-  private function generate_token() {
-    // Short, URL-safe token
-    return wp_generate_password(14, false, false);
-  }
-
-  public function save_post($post_id, $post) {
-    if ($post->post_type !== self::CPT) return;
-    if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
-    if (!isset($_POST['wpmq_nonce']) || !wp_verify_nonce($_POST['wpmq_nonce'], 'wpmq_save')) return;
-    if (!current_user_can('edit_post', $post_id)) return;
-
-    // Items
-    $items_in = isset($_POST['wpmq_items']) && is_array($_POST['wpmq_items']) ? $_POST['wpmq_items'] : [];
-    $items_out = [];
-
-    foreach ($items_in as $it) {
-      $image_id = isset($it['image_id']) ? intval($it['image_id']) : 0;
-      if (!$image_id) continue;
-
-      $start = isset($it['start']) ? sanitize_text_field($it['start']) : '';
-      $end   = isset($it['end']) ? sanitize_text_field($it['end']) : '';
-      $alt   = isset($it['alt']) ? sanitize_text_field($it['alt']) : '';
-      $link  = isset($it['link']) ? esc_url_raw($it['link']) : '';
-
-      // Basic validation: end cannot be before start (if both exist)
-      if ($start && $end) {
-        $tsS = strtotime($start);
-        $tsE = strtotime($end);
-        if ($tsS && $tsE && $tsE < $tsS) {
-          // swap or drop end; safer to drop end
-          $end = '';
-        }
-      }
-
-      $items_out[] = [
-        'image_id' => $image_id,
-        'start' => $start,
-        'end' => $end,
-        'alt' => $alt,
-        'link' => $link,
-      ];
-    }
-
-    update_post_meta($post_id, '_wpmq_items', $items_out);
-
-    // Settings
-    $s_in = isset($_POST['wpmq_settings']) && is_array($_POST['wpmq_settings']) ? $_POST['wpmq_settings'] : [];
-    $mode = isset($s_in['mode']) && in_array($s_in['mode'], ['marquee','static'], true) ? $s_in['mode'] : 'marquee';
-    $dir  = isset($s_in['direction']) && in_array($s_in['direction'], ['left','right'], true) ? $s_in['direction'] : 'left';
-
-    $s_out = [
-      'mode' => $mode,
-      'direction' => $dir,
-      'speed' => max(10, intval($s_in['speed'] ?? 80)),
-      'pause_on_hover' => !empty($s_in['pause_on_hover']) ? 1 : 0,
-      'pause_time' => max(0, intval($s_in['pause_time'] ?? 0)),
-      'window_height' => max(40, intval($s_in['window_height'] ?? 160)),
-      'gap' => max(0, intval($s_in['gap'] ?? 24)),
-      'bg' => sanitize_text_field($s_in['bg'] ?? '#000000'),
-    ];
-
-    update_post_meta($post_id, '_wpmq_settings', $s_out);
-
-    // Ensure token exists
-    $token = get_post_meta($post_id, '_wpmq_token', true);
-    if (!$token) update_post_meta($post_id, '_wpmq_token', $this->generate_token());
-  }
-
-  private function filter_scheduled_items($items) {
-    $now = time();
-    $out = [];
-    foreach ($items as $it) {
-      $start = !empty($it['start']) ? strtotime($it['start']) : 0;
-      $end   = !empty($it['end']) ? strtotime($it['end']) : 0;
-
-      if ($start && $now < $start) continue;
-      if ($end && $now > $end) continue;
-
-      $out[] = $it;
-    }
-    return $out;
-  }
-
-  private function render_playlist_html($post_id) {
-    $items = $this->filter_scheduled_items($this->get_items($post_id));
-    $s = $this->get_settings($post_id);
-
-    $mode = $s['mode'];
-    $dir  = $s['direction'];
-    $speed = intval($s['speed']);
-    $pauseHover = intval($s['pause_on_hover']);
-    $pauseTime = intval($s['pause_time']);
-    $h = intval($s['window_height']);
-    $gap = intval($s['gap']);
-    $bg = $s['bg'];
-
-    $uid = 'wpmq_' . $post_id . '_' . wp_generate_password(6, false, false);
-
-    ob_start();
-    ?>
-    <div class="wpmq-wrap" id="<?php echo esc_attr($uid); ?>"
-         data-mode="<?php echo esc_attr($mode); ?>"
-         data-direction="<?php echo esc_attr($dir); ?>"
-         data-speed="<?php echo esc_attr($speed); ?>"
-         data-pause-hover="<?php echo esc_attr($pauseHover); ?>"
-         data-pause-time="<?php echo esc_attr($pauseTime); ?>"
-         data-gap="<?php echo esc_attr($gap); ?>"
-         style="height: <?php echo esc_attr($h); ?>px; background: <?php echo esc_attr($bg); ?>; overflow:hidden; position:relative; width:100%;">
-      <?php if (empty($items)): ?>
-        <div style="color:#fff; opacity:.7; padding:12px; font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial;">No scheduled images right now.</div>
-      <?php else: ?>
-        <div class="wpmq-track" style="display:flex; align-items:center; height:100%; gap: <?php echo esc_attr($gap); ?>px; will-change: transform;">
-          <?php foreach ($items as $it):
-            $img_id = intval($it['image_id']);
-            $src = wp_get_attachment_image_url($img_id, 'large');
-            if (!$src) continue;
-            $alt = !empty($it['alt']) ? $it['alt'] : get_post_meta($img_id, '_wp_attachment_image_alt', true);
-            $alt = $alt ? $alt : get_the_title($img_id);
-            $link = !empty($it['link']) ? $it['link'] : '';
-            ?>
-            <div class="wpmq-item" style="height:100%; display:flex; align-items:center; flex:0 0 auto;">
-              <?php if ($link): ?>
-                <a href="<?php echo esc_url($link); ?>" target="_blank" rel="noopener noreferrer" style="display:flex; align-items:center; height:100%;">
-                  <img src="<?php echo esc_url($src); ?>" alt="<?php echo esc_attr($alt); ?>" style="height:100%; width:auto; display:block;" />
-                </a>
-              <?php else: ?>
-                <img src="<?php echo esc_url($src); ?>" alt="<?php echo esc_attr($alt); ?>" style="height:100%; width:auto; display:block;" />
-              <?php endif; ?>
-            </div>
-          <?php endforeach; ?>
-        </div>
-      <?php endif; ?>
-    </div>
-
-    <style>
-      /* Scoped styling */
-      #<?php echo esc_attr($uid); ?> .wpmq-track.is-paused { animation-play-state: paused !important; }
-      #<?php echo esc_attr($uid); ?>[data-mode="static"] .wpmq-track { justify-content: center; }
-    </style>
-
-   <?php
-    return ob_get_clean();
-  }
-
-  public function shortcode($atts) {
-    $atts = shortcode_atts(['playlist' => 0], $atts, 'wp_marquee');
-    $post_id = intval($atts['playlist']);
-    if (!$post_id || get_post_type($post_id) !== self::CPT) return '';
-    return $this->render_playlist_html($post_id);
-  }
-
-  public function maybe_render_public() {
-    $token = get_query_var(self::QV);
+  public function token_route() {
+    $token = get_query_var('wmp_token');
     if (!$token) return;
 
-    $token = sanitize_text_field($token);
-    $post_id = $this->find_playlist_by_token($token);
-    if (!$post_id) {
-      status_header(404);
-      echo 'Playlist not found.';
-      exit;
+    $data = $this->get_data();
+    foreach ($data['playlists'] as $pl) {
+      if (!empty($pl['token']) && $pl['token'] === $token) {
+        status_header(200);
+        nocache_headers();
+
+        $title = !empty($pl['name']) ? esc_html($pl['name']) : 'Playlist';
+        $shortcode = '[wmp_playlist id="' . esc_attr($pl['id']) . '"]';
+
+        echo '<!doctype html><html><head>';
+        echo '<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">';
+        echo '<title>' . $title . '</title>';
+        wp_head();
+        echo '</head><body style="margin:0;">';
+        echo do_shortcode($shortcode);
+        wp_footer();
+        echo '</body></html>';
+        exit;
+      }
     }
 
-    // Render a minimal standalone page (no theme) for signage use
-    $title = get_the_title($post_id);
-    $html = $this->render_playlist_html($post_id);
-
-    header('Content-Type: text/html; charset=' . get_bloginfo('charset'));
-    ?>
-    <!doctype html>
-    <html>
-      <head>
-        <meta charset="<?php echo esc_attr(get_bloginfo('charset')); ?>">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title><?php echo esc_html($title); ?></title>
-        <link rel="stylesheet" href="<?php echo esc_url($this->asset_url('public.css')); ?>">
-      </head>
-      <body>
-        <div class="wpmq-page">
-          <?php echo $html; // already escaped within ?>
-        </div>
-        <script src="<?php echo esc_url($this->asset_url('public.js')); ?>"></script>
-      </body>
-    </html>
-    <?php
+    status_header(404);
+    echo 'Playlist not found.';
     exit;
   }
 
-  private function find_playlist_by_token($token) {
-    $q = new WP_Query([
-      'post_type' => self::CPT,
-      'posts_per_page' => 1,
-      'fields' => 'ids',
-      'meta_query' => [
-        [
-          'key' => '_wpmq_token',
-          'value' => $token,
-          'compare' => '=',
-        ]
-      ]
+  private function admin_shell($title, $page_slug) {
+    if (!current_user_can('manage_options')) return;
+
+    $data = $this->get_data();
+    $playlists = $data['playlists'];
+
+    echo '<div class="wrap wmp-wrap">';
+    echo '<h1>' . esc_html($title) . ' <span class="wmp-ver">v1.0.8</span></h1>';
+
+    // two-column layout: editor left, playlists right
+    echo '<div class="wmp-grid">';
+    echo '<div class="wmp-left"><div class="wmp-card"><div id="wmp-editor" data-page="' . esc_attr($page_slug) . '"></div></div></div>';
+    echo '<div class="wmp-right"><div class="wmp-card">';
+    echo '<h2>Playlists</h2>';
+    echo '<div class="wmp-help">Use Items/Options buttons per playlist.</div>';
+    echo '<div id="wmp-playlist-list" data-playlists="' . esc_attr(wp_json_encode($playlists)) . '"></div>';
+    echo '</div></div>';
+    echo '</div></div>';
+  }
+
+  public function admin_items_page() {
+    $this->admin_shell('Marquee Playlists — Items', 'items');
+  }
+
+  public function admin_options_page() {
+    $this->admin_shell('Marquee Playlists — Options', 'options');
+  }
+
+  public function ajax_delete_playlist() {
+    check_ajax_referer('wmp_nonce', 'nonce');
+    if (!current_user_can('manage_options')) wp_send_json_error('No permission');
+
+    $id = isset($_POST['id']) ? sanitize_text_field($_POST['id']) : '';
+    if (!$id) wp_send_json_error('Missing id');
+
+    $data = $this->get_data();
+    $data['playlists'] = array_values(array_filter($data['playlists'], function($pl) use ($id){
+      return (string)$pl['id'] !== (string)$id;
+    }));
+    $this->save_data($data);
+
+    wp_send_json_success(['playlists'=>$data['playlists']]);
+  }
+
+  public function ajax_save_playlist() {
+    check_ajax_referer('wmp_nonce', 'nonce');
+    if (!current_user_can('manage_options')) wp_send_json_error('No permission');
+
+    $raw = isset($_POST['playlist']) ? wp_unslash($_POST['playlist']) : '';
+    if (!$raw) wp_send_json_error('Missing payload');
+
+    $pl = json_decode($raw, true);
+    if (!is_array($pl)) wp_send_json_error('Bad JSON');
+
+    $id = !empty($pl['id']) ? sanitize_text_field($pl['id']) : '';
+    $name = !empty($pl['name']) ? sanitize_text_field($pl['name']) : 'Untitled Playlist';
+
+    $mode = (!empty($pl['mode']) && $pl['mode'] === 'static') ? 'static' : 'marquee';
+    $direction = (!empty($pl['direction']) && $pl['direction'] === 'right') ? 'right' : 'left';
+
+    $speed = isset($pl['speed']) ? floatval($pl['speed']) : 60;
+    if ($speed < 10) $speed = 10;
+    if ($speed > 500) $speed = 500;
+
+    $pause_on_hover = !empty($pl['pause_on_hover']) ? 1 : 0;
+
+    $num_windows = isset($pl['num_windows']) ? intval($pl['num_windows']) : 1;
+    if ($num_windows < 1) $num_windows = 1;
+    if ($num_windows > 12) $num_windows = 12;
+
+    // NEW: playlist appearance options
+    $stage_bg = isset($pl['stage_bg']) ? sanitize_text_field($pl['stage_bg']) : '';
+    // allow empty/transparent, or something like #000000
+    if ($stage_bg !== '' && !preg_match('/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/', $stage_bg)) {
+      $stage_bg = ''; // fallback
+    }
+
+    $item_gap = isset($pl['item_gap']) ? intval($pl['item_gap']) : 18;
+    if ($item_gap < 0) $item_gap = 0;
+    if ($item_gap > 200) $item_gap = 200;
+
+    $allowed_fit = ['contain','fill','cover','stretch'];
+
+    $windows = [];
+    if (!empty($pl['windows']) && is_array($pl['windows'])) {
+      foreach ($pl['windows'] as $w) {
+        $fit = isset($w['fit']) ? sanitize_text_field($w['fit']) : 'contain';
+        if (!in_array($fit, $allowed_fit, true)) $fit = 'contain';
+
+        $windows[] = [
+          'x' => isset($w['x']) ? intval($w['x']) : 0,
+          'y' => isset($w['y']) ? intval($w['y']) : 0,
+          'width' => isset($w['width']) ? intval($w['width']) : 800,
+          'height' => isset($w['height']) ? intval($w['height']) : 200,
+          'fit' => $fit,
+        ];
+      }
+    }
+
+    for ($i = 0; $i < $num_windows; $i++) {
+      if (!isset($windows[$i])) {
+        $prev_h = ($i > 0 && isset($windows[$i-1]['height'])) ? intval($windows[$i-1]['height']) : 200;
+        $windows[$i] = ['x'=>0, 'y'=>($i*($prev_h+10)), 'width'=>800, 'height'=>$prev_h, 'fit'=>'contain'];
+      }
+
+      $fit = isset($windows[$i]['fit']) ? $windows[$i]['fit'] : 'contain';
+      if (!in_array($fit, $allowed_fit, true)) $fit = 'contain';
+      $windows[$i]['fit'] = $fit;
+
+      $windows[$i]['width']  = max(100, min(3000, intval($windows[$i]['width'])));
+      $windows[$i]['height'] = max(50,  min(2000, intval($windows[$i]['height'])));
+      $windows[$i]['x']      = max(0,   min(8000, intval($windows[$i]['x'])));
+      $windows[$i]['y']      = max(0,   min(8000, intval($windows[$i]['y'])));
+    }
+    $windows = array_slice($windows, 0, $num_windows);
+
+    $items = [];
+    if (!empty($pl['items']) && is_array($pl['items'])) {
+      $order = 0;
+      foreach ($pl['items'] as $it) {
+        $order++;
+
+        $url = !empty($it['url']) ? esc_url_raw($it['url']) : '';
+        if (!$url) continue;
+
+        $type = !empty($it['type']) ? sanitize_text_field($it['type']) : 'image';
+        if ($type !== 'video') $type = 'image';
+
+        $start = !empty($it['start']) ? sanitize_text_field($it['start']) : '';
+        $end   = !empty($it['end'])   ? sanitize_text_field($it['end'])   : '';
+
+        $duration = isset($it['duration']) ? intval($it['duration']) : 0;
+        if ($duration < 0) $duration = 0;
+        if ($duration > 86400) $duration = 86400;
+
+        $windows_target = [];
+        if (!empty($it['windows']) && is_array($it['windows'])) {
+          foreach ($it['windows'] as $wi) {
+            $wi = intval($wi);
+            if ($wi >= 1 && $wi <= $num_windows) $windows_target[] = $wi;
+          }
+          $windows_target = array_values(array_unique($windows_target));
+        }
+
+        $items[] = [
+          'id' => !empty($it['id']) ? sanitize_text_field($it['id']) : ('it_' . substr(md5($url . microtime(true)), 0, 10)),
+          'url' => $url,
+          'type' => $type,
+          'start' => $start,
+          'end' => $end,
+          'duration' => $duration,
+          'windows' => $windows_target,
+          'order' => isset($it['order']) ? intval($it['order']) : $order,
+        ];
+      }
+    }
+
+    usort($items, function($a,$b){
+      return intval($a['order']) <=> intval($b['order']);
+    });
+
+    $data = $this->get_data();
+
+    if (!$id) {
+      $id = 'pl_' . substr(md5($name . microtime(true) . rand()), 0, 10);
+      $token = $this->new_token();
+    } else {
+      $token = $this->new_token();
+      foreach ($data['playlists'] as $existing) {
+        if ((string)$existing['id'] === (string)$id && !empty($existing['token'])) {
+          $token = $existing['token'];
+          break;
+        }
+      }
+    }
+
+    $new_pl = [
+      'id' => $id,
+      'token' => $token,
+      'name' => $name,
+
+      // options
+      'mode' => $mode,
+      'direction' => $direction,
+      'speed' => $speed,
+      'pause_on_hover' => $pause_on_hover,
+      'num_windows' => $num_windows,
+      'windows' => $windows,
+      'stage_bg' => $stage_bg,
+      'item_gap' => $item_gap,
+
+      // items
+      'items' => $items,
+
+      'updated_at' => current_time('mysql'),
+    ];
+
+    $found = false;
+    foreach ($data['playlists'] as $idx => $existing) {
+      if ((string)$existing['id'] === (string)$id) {
+        $data['playlists'][$idx] = $new_pl;
+        $found = true;
+        break;
+      }
+    }
+    if (!$found) $data['playlists'][] = $new_pl;
+
+    $this->save_data($data);
+
+    wp_send_json_success([
+      'playlist' => $new_pl,
+      'playlists' => $data['playlists'],
+      'preview_url' => site_url('/simp/' . $token . '/'),
     ]);
-    if (!empty($q->posts)) return intval($q->posts[0]);
-    return 0;
+  }
+
+  private function is_item_active($it, $now_ts) {
+    $start_ts = 0;
+    $end_ts = 0;
+
+    if (!empty($it['start'])) {
+      $start_ts = strtotime($it['start']);
+      if ($start_ts === false) $start_ts = 0;
+    }
+    if (!empty($it['end'])) {
+      $end_ts = strtotime($it['end']);
+      if ($end_ts === false) $end_ts = 0;
+    }
+
+    if ($start_ts && $now_ts < $start_ts) return false;
+    if ($end_ts && $now_ts > $end_ts) return false;
+    return true;
+  }
+
+  private function render_media($it) {
+    $url = esc_url($it['url']);
+    $type = !empty($it['type']) ? $it['type'] : 'image';
+
+    if ($type === 'video') {
+      return '<video class="wmp-media wmp-video" src="' . $url . '" muted playsinline autoplay loop preload="metadata"></video>';
+    }
+    return '<img class="wmp-media wmp-img" src="' . $url . '" alt="" loading="lazy" />';
+  }
+
+  public function shortcode_playlist($atts) {
+    $atts = shortcode_atts(['id' => ''], $atts);
+    $id = sanitize_text_field($atts['id']);
+    if (!$id) return '';
+
+    $data = $this->get_data();
+    $pl = null;
+    foreach ($data['playlists'] as $p) {
+      if ((string)$p['id'] === (string)$id) { $pl = $p; break; }
+    }
+    if (!$pl) return '<div class="wmp-notfound">Playlist not found.</div>';
+
+    $mode = (!empty($pl['mode']) && $pl['mode'] === 'static') ? 'static' : 'marquee';
+    $direction = (!empty($pl['direction']) && $pl['direction'] === 'right') ? 'right' : 'left';
+    $speed = isset($pl['speed']) ? floatval($pl['speed']) : 60;
+    $pause = !empty($pl['pause_on_hover']) ? '1' : '0';
+
+    $num_windows = isset($pl['num_windows']) ? intval($pl['num_windows']) : 1;
+    if ($num_windows < 1) $num_windows = 1;
+
+    $stage_bg = isset($pl['stage_bg']) ? $pl['stage_bg'] : '';
+    $item_gap = isset($pl['item_gap']) ? intval($pl['item_gap']) : 18;
+
+    $windows = (!empty($pl['windows']) && is_array($pl['windows'])) ? $pl['windows'] : [['x'=>0,'y'=>0,'width'=>800,'height'=>200,'fit'=>'contain']];
+
+    for ($i=0; $i<$num_windows; $i++){
+      if (!isset($windows[$i])) $windows[$i] = ['x'=>0,'y'=>0,'width'=>800,'height'=>200,'fit'=>'contain'];
+      $windows[$i]['x'] = intval($windows[$i]['x'] ?? 0);
+      $windows[$i]['y'] = intval($windows[$i]['y'] ?? 0);
+      $windows[$i]['width'] = intval($windows[$i]['width'] ?? 800);
+      $windows[$i]['height'] = intval($windows[$i]['height'] ?? 200);
+      $fit = sanitize_text_field($windows[$i]['fit'] ?? 'contain');
+      if (!in_array($fit, ['contain','fill','cover','stretch'], true)) $fit = 'contain';
+      $windows[$i]['fit'] = $fit;
+    }
+    $windows = array_slice($windows, 0, $num_windows);
+
+    $now = current_time('timestamp');
+    $items = (!empty($pl['items']) && is_array($pl['items'])) ? $pl['items'] : [];
+    $active = [];
+    foreach ($items as $it) {
+      if ($this->is_item_active($it, $now)) $active[] = $it;
+    }
+
+    $by_window = [];
+    for ($w=1; $w <= $num_windows; $w++) $by_window[$w] = [];
+
+    foreach ($active as $it) {
+      $targets = (!empty($it['windows']) && is_array($it['windows']) && count($it['windows'])>0) ? $it['windows'] : range(1, $num_windows);
+      foreach ($targets as $w) {
+        if (isset($by_window[$w])) $by_window[$w][] = $it;
+      }
+    }
+
+    $wrap_id = 'wmp_' . substr(md5($id . microtime(true)), 0, 10);
+
+    ob_start();
+    ?>
+    <div
+      id="<?php echo esc_attr($wrap_id); ?>"
+      class="wmp-wrap-front"
+      data-mode="<?php echo esc_attr($mode); ?>"
+      data-direction="<?php echo esc_attr($direction); ?>"
+      data-speed="<?php echo esc_attr($speed); ?>"
+      data-pause="<?php echo esc_attr($pause); ?>"
+      style="<?php
+        // CSS vars for front-end styling
+        $vars = [];
+        if ($stage_bg !== '') $vars[] = '--wmp-bg:' . esc_attr($stage_bg);
+        $vars[] = '--wmp-gap:' . intval($item_gap) . 'px';
+        echo esc_attr(implode(';', $vars));
+      ?>"
+    >
+      <div class="wmp-stage">
+        <?php for ($w=1; $w <= $num_windows; $w++):
+          $geom = $windows[$w-1] ?? ['x'=>0,'y'=>0,'width'=>800,'height'=>200,'fit'=>'contain'];
+          $x = intval($geom['x']); $y=intval($geom['y']); $ww=intval($geom['width']); $hh=intval($geom['height']);
+          $fit = esc_attr($geom['fit'] ?? 'contain');
+          $window_items = $by_window[$w];
+          ?>
+          <div class="wmp-window" data-window="<?php echo esc_attr($w); ?>" data-fit="<?php echo $fit; ?>"
+               style="left:<?php echo $x; ?>px; top:<?php echo $y; ?>px; width:<?php echo $ww; ?>px; height:<?php echo $hh; ?>px;">
+            <?php if ($mode === 'static'): ?>
+              <div class="wmp-static" data-static="1">
+                <?php
+                  if (count($window_items) === 0) {
+                    echo '<div class="wmp-empty">No active items</div>';
+                  } else {
+                    foreach ($window_items as $idx => $it) {
+                      $dur = isset($it['duration']) ? intval($it['duration']) : 0;
+                      $hidden = ($idx === 0) ? '' : ' style="display:none"';
+                      echo '<div class="wmp-static-item" data-duration="' . esc_attr($dur) . '"' . $hidden . '>';
+                      echo $this->render_media($it);
+                      echo '</div>';
+                    }
+                  }
+                ?>
+              </div>
+            <?php else: ?>
+              <div class="wmp-marquee" data-marquee="1">
+                <div class="wmp-track">
+                  <?php
+                    if (count($window_items) === 0) {
+                      echo '<div class="wmp-empty">No active items</div>';
+                    } else {
+                      echo '<div class="wmp-seq">';
+                      foreach ($window_items as $it) {
+                        echo '<div class="wmp-item">';
+                        echo $this->render_media($it);
+                        echo '</div>';
+                      }
+                      echo '</div>';
+
+                      echo '<div class="wmp-seq wmp-seq-clone" aria-hidden="true">';
+                      foreach ($window_items as $it) {
+                        echo '<div class="wmp-item">';
+                        echo $this->render_media($it);
+                        echo '</div>';
+                      }
+                      echo '</div>';
+                    }
+                  ?>
+                </div>
+              </div>
+            <?php endif; ?>
+          </div>
+        <?php endfor; ?>
+      </div>
+    </div>
+    <?php
+    return ob_get_clean();
   }
 }
 
-register_activation_hook(__FILE__, ['WP_Marquee_Playlists', 'activate']);
-register_deactivation_hook(__FILE__, ['WP_Marquee_Playlists', 'deactivate']);
+new WMP_Marquee_Playlists();
 
-new WP_Marquee_Playlists();
+register_activation_hook(__FILE__, function(){
+  (new WMP_Marquee_Playlists())->add_rewrite();
+  flush_rewrite_rules();
+});
+register_deactivation_hook(__FILE__, function(){
+  flush_rewrite_rules();
+});

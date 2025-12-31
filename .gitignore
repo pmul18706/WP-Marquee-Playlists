@@ -1,0 +1,20 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Node / build artifacts (if you add tooling later)
+node_modules/
+dist/
+build/
+*.map
+
+# Logs
+*.log
+
+# Env
+.env
+.env.*

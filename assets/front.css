@@ -1,0 +1,84 @@
+.wmp-wrap-front{width:100%}
+.wmp-stage{
+  position:relative;
+  width:100%;
+  min-height:240px;
+  background: var(--wmp-bg, transparent);
+  overflow:hidden;
+}
+
+.wmp-window{
+  position:absolute;
+  overflow:hidden;
+  background:transparent;
+}
+
+.wmp-marquee{width:100%;height:100%;overflow:hidden}
+
+.wmp-track{
+  display:flex;
+  align-items:center;
+  height:100%;
+  will-change: transform;
+}
+
+.wmp-seq{
+  display:flex;
+  align-items:center;
+  height:100%;
+  gap: var(--wmp-gap, 18px);
+}
+
+.wmp-item{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  height:100%;
+  overflow:hidden;
+}
+
+.wmp-media{display:block}
+
+/* CONTAIN */
+.wmp-window[data-fit="contain"] .wmp-media{
+  height:100%;
+  width:auto;
+  object-fit:contain;
+  max-width:none;
+}
+
+/* FILL (letterbox) */
+.wmp-window[data-fit="fill"]{ background:#000; }
+.wmp-window[data-fit="fill"] .wmp-item{ width:100%; }
+.wmp-window[data-fit="fill"] .wmp-media{
+  width:100%;
+  height:100%;
+  object-fit:contain;
+  max-width:none;
+}
+
+/* COVER */
+.wmp-window[data-fit="cover"] .wmp-media{
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  max-width:none;
+}
+
+/* STRETCH */
+.wmp-window[data-fit="stretch"] .wmp-media{
+  width:100%;
+  height:100%;
+  object-fit:fill;
+  max-width:none;
+}
+
+.wmp-empty{
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+  font-size:14px;
+  color:#777;
+  padding:10px;
+}
+
+.wmp-static{width:100%;height:100%;display:flex;align-items:center;justify-content:center}
+.wmp-static-item{width:100%;height:100%;display:flex;align-items:center;justify-content:center}
