@@ -1,0 +1,113 @@
+/* =========================
+   WMP2 Option A: Fullscreen Stage
+   ========================= */
+
+/* Make sure the page doesn't constrain the player */
+html, body {
+  height: 100%;
+}
+
+/* If the player exists on the page, kill scrollbars / body padding from themes */
+body:has(.wmp2-player) {
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+/* Player + stage fill the viewport */
+.wmp2-player,
+.wmp2-stage {
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+/* If themes apply max-width to content containers, this helps */
+.wmp2-player,
+.wmp2-player * {
+  box-sizing: border-box;
+}
+
+/* Stage is the viewport */
+.wmp2-stage {
+  position: relative !important;
+  background: #000;
+}
+
+/* Windows are positioned using x/y/width/height (absolute) */
+.wmp2-window {
+  position: absolute;
+  overflow: hidden !important;
+}
+
+/* Marquee sequence strip */
+.wmp2-seq {
+  display: flex;
+  gap: var(--wmp-gap, 18px);
+  align-items: center;
+  height: 100%;
+  will-change: transform;
+  transform: translate3d(0,0,0);
+}
+
+/* Items can’t grow the window */
+.wmp2-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden !important;
+  flex: 0 0 auto;
+}
+
+.wmp2-media {
+  display: block;
+}
+
+/* Fit modes */
+.wmp2-window[data-fit="contain"] .wmp2-media { height: 100%; width: auto; object-fit: contain; max-width: none; }
+.wmp2-window[data-fit="fill"]    .wmp2-media { width: 100%; height: 100%; object-fit: contain; max-width: none; }
+.wmp2-window[data-fit="cover"]   .wmp2-media { width: 100%; height: 100%; object-fit: cover; max-width: none; }
+.wmp2-window[data-fit="stretch"] .wmp2-media { width: 100%; height: 100%; object-fit: fill;  max-width: none; }
+
+/* Slides always fill the window canvas */
+.wmp2-slide {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: system-ui;
+  padding: 20px;
+  box-sizing: border-box;
+  overflow: hidden; /* critical */
+}
+
+/* slide text marquee */
+.wmp2-slide-marquee {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.wmp2-slide-marquee-track {
+  position: absolute;
+  white-space: nowrap;
+  will-change: transform;
+}
+
+@keyframes wmp2_slide_marquee_left {
+  from { transform: translate3d(100%,0,0); }
+  to   { transform: translate3d(-100%,0,0); }
+}
+
+@keyframes wmp2_slide_marquee_right {
+  from { transform: translate3d(-100%,0,0); }
+  to   { transform: translate3d(100%,0,0); }
+}

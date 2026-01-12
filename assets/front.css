@@ -1,10 +1,51 @@
 .wmp-wrap-front{width:100%}
-.wmp-stage{
-  position:relative;
-  width:100%;
-  min-height:240px;
-  background: var(--wmp-bg, transparent);
-  overflow:hidden;
+/* =========================
+   WMP2 Option A: Fullscreen Stage
+   ========================= */
+
+/* Make sure the page doesn't constrain the player */
+html, body {
+  height: 100%;
+}
+
+/* If the player is inside content, kill theme constraints */
+.wmp2-player,
+.wmp2-stage {
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+
+/* If themes apply max-width to content containers, this helps */
+.wmp2-player * {
+  box-sizing: border-box;
+}
+
+/* Stage is the viewport */
+.wmp2-stage {
+  position: relative !important;
+  background: #000; /* optional, makes edge cases clean */
+}
+
+/* Windows should size within stage */
+.wmp2-window {
+  position: absolute; /* assuming you position windows via left/top/width/height */
+  overflow: hidden !important;
+}
+
+/* Marquee sequence strip */
+.wmp2-seq {
+  will-change: transform;
+}
+
+/* Items can’t grow the window */
+.wmp2-item {
+  overflow: hidden !important;
+  max-height: 100% !important;
 }
 
 .wmp-window{
