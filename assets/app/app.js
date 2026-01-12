@@ -331,6 +331,7 @@ console.log("WMP2 app.js loaded", window.WMP2);
     }
 
     // ---------- Options panel ----------
+    let detailView = "items";
     function getOpts() {
       const o = selected?.options || {};
       return {
@@ -1178,6 +1179,9 @@ console.log("WMP2 app.js loaded", window.WMP2);
 
       const preview = simp2Url(selected.token);
 
+      const showingOptions = detailView === "options";
+      const showingItems = !showingOptions;
+
       el.innerHTML = `
         <div class="wmp2-row">
           <label style="width:110px">Name</label>
@@ -1189,23 +1193,35 @@ console.log("WMP2 app.js loaded", window.WMP2);
           <div><b>Preview</b>: <a target="_blank" href="${esc(preview)}">${esc(preview)}</a></div>
         </div>
 
-        <div class="wmp2-row">
-          <button id="wmp2-add-media" class="wmp2-btn secondary" type="button">Add Media</button>
-          <button id="wmp2-add-slide" class="wmp2-btn secondary" type="button">Add Slide</button>
-          <button id="wmp2-add-cat-rule" class="wmp2-btn secondary" type="button">Add Category Rule</button>
-          <button id="wmp2-manage-cats" class="wmp2-btn secondary" type="button">Manage Categories</button>
-          <button id="wmp2-save-order" class="wmp2-btn secondary" type="button" ${items.length < 2 ? "disabled" : ""}>Save Order</button>
+        <div class="wmp2-tabs">
+          <button class="wmp2-tab ${showingItems ? "is-active" : ""}" data-view="items" type="button">Items</button>
+          <button class="wmp2-tab ${showingOptions ? "is-active" : ""}" data-view="options" type="button">Options</button>
         </div>
 
         <hr class="wmp2-hr">
 
-        ${renderOptionsPanel()}
+        ${showingItems ? `
+          <div class="wmp2-row">
+            <button id="wmp2-add-media" class="wmp2-btn secondary" type="button">Add Media</button>
+            <button id="wmp2-add-slide" class="wmp2-btn secondary" type="button">Add Slide</button>
+            <button id="wmp2-add-cat-rule" class="wmp2-btn secondary" type="button">Add Category Rule</button>
+            <button id="wmp2-manage-cats" class="wmp2-btn secondary" type="button">Manage Categories</button>
+            <button id="wmp2-save-order" class="wmp2-btn secondary" type="button" ${items.length < 2 ? "disabled" : ""}>Save Order</button>
+          </div>
 
-        <hr class="wmp2-hr">
-
-        <div class="wmp2-subtitle">Items</div>
-        <div id="wmp2-items-area">${renderItems()}</div>
+          <div class="wmp2-subtitle">Items</div>
+          <div id="wmp2-items-area">${renderItems()}</div>
+        ` : `
+          ${renderOptionsPanel()}
+        `}
       `;
+
+      document.querySelectorAll(".wmp2-tab").forEach(tab => {
+        tab.addEventListener("click", () => {
+          detailView = tab.getAttribute("data-view") || "items";
+          renderDetail();
+        });
+      });
 
       // Preview button WAS NEVER WIRED in your file — wire it now
       $("#wmp2-preview")?.addEventListener("click", () => window.open(preview, "_blank"));
@@ -1223,7 +1239,7 @@ console.log("WMP2 app.js loaded", window.WMP2);
       });
 
       // Save options
-      $("#wmp2-save-options").addEventListener("click", async () => {
+      $("#wmp2-save-options")?.addEventListener("click", async () => {
         try {
           const options = readOptionsFromUI();
           const updated = await api(`playlists/${selected.id}`, { method: "PATCH", body: { options } });
@@ -1234,7 +1250,7 @@ console.log("WMP2 app.js loaded", window.WMP2);
       });
 
       // Changing num_windows re-renders immediately
-      $("#opt-numw").addEventListener("change", () => {
+      $("#opt-numw")?.addEventListener("change", () => {
         try {
           const options = readOptionsFromUI();
           selected.options = { ...(selected.options || {}), ...options };
@@ -1243,13 +1259,13 @@ console.log("WMP2 app.js loaded", window.WMP2);
       });
 
       // Buttons
-      $("#wmp2-add-media").addEventListener("click", () => openMediaPicker());
-      $("#wmp2-add-slide").addEventListener("click", () => openSlideCreator());
-      $("#wmp2-manage-cats").addEventListener("click", () => openCategoryManager());
-      $("#wmp2-add-cat-rule").addEventListener("click", () => openAddCategoryRule());
+      $("#wmp2-add-media")?.addEventListener("click", () => openMediaPicker());
+      $("#wmp2-add-slide")?.addEventListener("click", () => openSlideCreator());
+      $("#wmp2-manage-cats")?.addEventListener("click", () => openCategoryManager());
+      $("#wmp2-add-cat-rule")?.addEventListener("click", () => openAddCategoryRule());
 
       // Save order
-      $("#wmp2-save-order").addEventListener("click", async () => {
+      $("#wmp2-save-order")?.addEventListener("click", async () => {
         try {
           const order = items.map(x => x.id);
           items = await api(`playlists/${selected.id}/items/reorder`, { method: "POST", body: { order } });
@@ -1261,6 +1277,7 @@ console.log("WMP2 app.js loaded", window.WMP2);
       });
 
       const itemsArea = $("#wmp2-items-area");
+      if (!itemsArea) return;
 
       // Click actions
       itemsArea.addEventListener("click", async (e) => {
@@ -1381,6 +1398,7 @@ console.log("WMP2 app.js loaded", window.WMP2);
       items = await api(`playlists/${id}/items`);
       hydrateItems(items);
       await hydrateAttachmentUrls(items);
+      detailView = "items";
       renderDetail();
     }
 
