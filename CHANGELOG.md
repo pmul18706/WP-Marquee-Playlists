@@ -6,4 +6,5 @@
 - General fixes and polish
 
 ## [Unreleased]
-- TBD
+- Remove empty readme.txt file
+- Remove unused empty rotation placeholder files
